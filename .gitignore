@@ -1,0 +1,9 @@
+*.pfx
+*.pem
+*.key
+*.cer
+.env
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
