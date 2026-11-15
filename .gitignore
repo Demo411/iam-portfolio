@@ -10,3 +10,6 @@
 
 CLAUDE.local.md
 .claude/settings.local.json
+
+# Audit logs contain names, UPNs and employee IDs; commit redacted copies to samples/ instead
+logs/
