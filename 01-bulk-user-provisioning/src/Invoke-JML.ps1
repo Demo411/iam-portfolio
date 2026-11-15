@@ -3,7 +3,7 @@
 
 <#
 .SYNOPSIS
-    Joiner-mover-leaver automation driven by an HR CSV export (Joiner and Mover phases).
+    Joiner-mover-leaver automation driven by an HR CSV export.
 
 .DESCRIPTION
     The HR export is the source of truth. For every row with status 'Active' this script:
@@ -19,7 +19,19 @@
     If the derived UPN is already taken by a user with a different employeeId, the row is
     logged as Failed (it is never silently skipped or adopted).
 
-    Rows with any other status are logged as skipped (Leaver handling is not implemented yet).
+    An Active row whose account is disabled in the tenant is logged as Failed and left alone.
+    The script never re-enables an account, because it can't tell a rehire from an account an
+    administrator disabled on purpose (for example after a compromise).
+
+    For every row with status 'Terminated' (Leaver) this script finds the user by employeeId and:
+      1. Disables the account (accountEnabled = false).
+      2. Revokes their sign-in sessions (refresh tokens and browser session cookies), if this
+         run is the one that disabled the account.
+      3. Removes them from every group this script manages.
+    The user, their attributes and their manager are kept, so the account can be reviewed and
+    deleted after the retention period. The script never deletes anything.
+
+    Rows with any other status are logged as skipped.
     The script never renames a user (UPN or display name) and never removes a manager.
 
     A department group counts as managed by this script if its description ends with
@@ -128,7 +140,7 @@ function Convert-ManagerUpn {
 function Get-UserByEmployeeId {
     param([string] $EmployeeId)
     $escaped = $EmployeeId -replace "'", "''"
-    $found = @(Get-MgUser -Filter "employeeId eq '$escaped'" -Property Id, UserPrincipalName, EmployeeId, Department, JobTitle)
+    $found = @(Get-MgUser -Filter "employeeId eq '$escaped'" -Property Id, UserPrincipalName, EmployeeId, Department, JobTitle, AccountEnabled)
     if ($found.Count -gt 1) {
         throw "employeeId $EmployeeId matches $($found.Count) users: $($found.UserPrincipalName -join ', ')"
     }
@@ -182,6 +194,7 @@ function Get-GroupMemberIds {
 $userIds = @{}        # object id of the user in the tenant
 $userUpns = @{}       # UPN the user has (or will have) in the tenant
 $plannedIds = [System.Collections.Generic.HashSet[string]]::new()   # would be created (dry run only)
+$disabledIds = [System.Collections.Generic.HashSet[string]]::new()  # Active in HR but disabled in the tenant
 $rowByUpnLocal = @{}  # CSV manager values are placeholder UPNs; map their local part back to a row
 
 function Resolve-Manager {
@@ -224,6 +237,7 @@ $duplicateIds = @($rows | Group-Object employeeId | Where-Object Count -gt 1)
 if ($duplicateIds.Count -gt 0) { throw "Duplicate employeeId values: $($duplicateIds.Name -join ', ')" }
 
 $active = @($rows | Where-Object status -eq 'Active')
+$leavers = @($rows | Where-Object status -eq 'Terminated')
 
 # The department decides group membership, so an Active row without one is a data error.
 $noDept = @($active | Where-Object { -not $_.department })
@@ -235,12 +249,12 @@ if ($duplicateUpns.Count -gt 0) { throw "Rows derive the same UPN: $($duplicateU
 
 foreach ($r in $rows) { $rowByUpnLocal[((Get-UpnFromName $r.displayName) -split '@')[0]] = $r }
 
-foreach ($r in ($rows | Where-Object status -ne 'Active')) {
+foreach ($r in ($rows | Where-Object { $_.status -notin 'Active', 'Terminated' })) {
     Write-Audit -Action 'Skip' -Result 'Skipped' -EmployeeId $r.employeeId -Target $r.displayName `
-        -Detail "Status '$($r.status)': Leaver handling not implemented"
+        -Detail "Status '$($r.status)' is not handled (expected Active or Terminated)"
 }
 
-Write-Host "Mode: $mode | Active rows: $($active.Count) of $($rows.Count) | Audit log: $AuditLogPath"
+Write-Host "Mode: $mode | Active: $($active.Count) | Terminated: $($leavers.Count) | Rows: $($rows.Count) | Audit log: $AuditLogPath"
 
 # ---------------------------------------------------------------- run
 
@@ -260,7 +274,9 @@ try {
     }
 
     $groupIds = @{}
-    foreach ($dept in ($active.department | Sort-Object -Unique)) {
+    # ForEach-Object, not $active.department: under StrictMode that throws when there are no
+    # Active rows (an all-leavers file).
+    foreach ($dept in ($active | ForEach-Object { $_.department } | Sort-Object -Unique)) {
         $groupName = "$GroupPrefix$dept"
         $group = $prefixGroups | Where-Object DisplayName -eq $groupName | Select-Object -First 1
         if ($group) {
@@ -309,6 +325,17 @@ try {
             $userUpns[$empId] = $existing.UserPrincipalName
             Write-Audit -Action 'CreateUser' -Result 'Skipped' -EmployeeId $empId -Target $existing.UserPrincipalName `
                 -Detail 'Matched existing user on employeeId'
+
+            # Active in HR but disabled in the tenant: a rehire, or an account an administrator
+            # disabled on purpose. The script can't tell which, so it changes nothing for this
+            # user (no update, manager or group changes) and leaves the decision to a person.
+            if ($existing.AccountEnabled -eq $false) {
+                [void]$disabledIds.Add($empId)
+                $failures++
+                Write-Audit -Action 'CheckAccountEnabled' -Result 'Failed' -EmployeeId $empId -Target $existing.UserPrincipalName `
+                    -Detail 'Active in the HR export but the account is disabled. Check why; for a rehire, enable it by hand and re-run'
+                continue
+            }
 
             # Mover: bring department and job title in line with the HR export. An empty job
             # title in the export leaves the tenant value alone.
@@ -396,6 +423,14 @@ try {
         $userId = $userIds[$empId]
         $upn = if ($userUpns[$empId]) { $userUpns[$empId] } else { Get-UpnFromName $r.displayName }
         $isPlanned = $plannedIds.Contains($empId)
+
+        # Checked before $userId: a manager lookup for someone else may have filled it in.
+        if ($disabledIds.Contains($empId)) {
+            foreach ($action in 'SetManager', 'AddToGroup', 'RemoveFromGroup') {
+                Write-Audit -Action $action -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'Account is disabled (see CheckAccountEnabled)'
+            }
+            continue
+        }
 
         if (-not $userId -and -not $isPlanned) {
             Write-Audit -Action 'SetManager' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'No user resolved (lookup or create failed)'
@@ -506,6 +541,95 @@ try {
         }
         if ($removed -eq 0) {
             Write-Audit -Action 'RemoveFromGroup' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'Not in any other department group'
+        }
+    }
+
+    # 4. Leavers: disable, revoke sessions, remove from managed groups. Nothing is deleted.
+    foreach ($r in $leavers) {
+        $empId = $r.employeeId
+        try { $existing = Get-UserByEmployeeId $empId }
+        catch {
+            $failures++
+            Write-Audit -Action 'LookupUser' -Result 'Failed' -EmployeeId $empId -Target $r.displayName -Detail $_.Exception.Message
+            continue
+        }
+        if (-not $existing) {
+            Write-Audit -Action 'DisableUser' -Result 'Skipped' -EmployeeId $empId -Target $r.displayName `
+                -Detail 'No user with this employeeId (never provisioned, or already deleted)'
+            continue
+        }
+        $userId = $existing.Id
+        $upn = $existing.UserPrincipalName
+
+        # If HR still lists the leaver as manager of Active employees, flag it. The script doesn't
+        # reassign them: HR has to name a new manager.
+        $leaverLocal = ((Get-UpnFromName $r.displayName) -split '@')[0]
+        $reports = @($active | Where-Object { $_.manager -and ($_.manager -split '@')[0].ToLowerInvariant() -eq $leaverLocal })
+        $reportNote = if ($reports.Count -gt 0) { "; still HR manager of $($reports.Count) Active employee(s): $(($reports | ForEach-Object { $_.employeeId }) -join ', ')" } else { '' }
+        if ($reportNote) { Write-Warning "$upn is leaving$reportNote" }
+
+        # Disable. Only an account that is enabled now is disabled and has its sessions revoked.
+        $wasEnabled = $existing.AccountEnabled -ne $false
+        if (-not $wasEnabled) {
+            Write-Audit -Action 'DisableUser' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail "Account already disabled$reportNote"
+        }
+        elseif ($PSCmdlet.ShouldProcess($upn, 'Disable account')) {
+            try {
+                Update-MgUser -UserId $userId -BodyParameter @{ accountEnabled = $false }
+                Write-Audit -Action 'DisableUser' -Result 'Success' -EmployeeId $empId -Target $upn -Detail "accountEnabled true -> false$reportNote"
+            }
+            catch {
+                $failures++
+                Write-Audit -Action 'DisableUser' -Result 'Failed' -EmployeeId $empId -Target $upn -Detail $_.Exception.Message
+            }
+        }
+        else {
+            Write-Audit -Action 'DisableUser' -Result $declined -EmployeeId $empId -Target $upn -Detail "accountEnabled true -> false$reportNote"
+        }
+
+        # Revoke sessions, even if the disable failed, so existing sessions still end. An account
+        # that was already disabled is skipped: it can't redeem refresh tokens, and a past revoke
+        # can't be detected, so revoking on every run would break idempotency.
+        if (-not $wasEnabled) {
+            Write-Audit -Action 'RevokeSessions' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'Account already disabled'
+        }
+        elseif ($PSCmdlet.ShouldProcess($upn, 'Revoke sign-in sessions')) {
+            try {
+                Invoke-MgGraphRequest -Method POST -Uri "v1.0/users/$userId/revokeSignInSessions" | Out-Null
+                Write-Audit -Action 'RevokeSessions' -Result 'Success' -EmployeeId $empId -Target $upn -Detail 'Refresh tokens and session cookies invalidated'
+            }
+            catch {
+                $failures++
+                Write-Audit -Action 'RevokeSessions' -Result 'Failed' -EmployeeId $empId -Target $upn -Detail $_.Exception.Message
+            }
+        }
+        else {
+            Write-Audit -Action 'RevokeSessions' -Result $declined -EmployeeId $empId -Target $upn
+        }
+
+        # Remove from every managed group. Groups the script doesn't manage are left alone.
+        $removed = 0
+        foreach ($name in ($managedGroups.Keys | Sort-Object)) {
+            $gid = $managedGroups[$name]
+            if (-not (Get-GroupMemberIds $gid).Contains($userId)) { continue }
+            $removed++
+            if ($PSCmdlet.ShouldProcess($upn, "Remove from group $name")) {
+                try {
+                    Remove-MgGroupMemberDirectoryObjectByRef -GroupId $gid -DirectoryObjectId $userId
+                    [void](Get-GroupMemberIds $gid).Remove($userId)
+                    Write-Audit -Action 'RemoveFromGroup' -Result 'Success' -EmployeeId $empId -Target $upn -Detail $name
+                }
+                catch {
+                    $failures++
+                    Write-Audit -Action 'RemoveFromGroup' -Result 'Failed' -EmployeeId $empId -Target $upn -Detail "$name; $($_.Exception.Message)"
+                }
+            }
+            else {
+                Write-Audit -Action 'RemoveFromGroup' -Result $declined -EmployeeId $empId -Target $upn -Detail $name
+            }
+        }
+        if ($removed -eq 0) {
+            Write-Audit -Action 'RemoveFromGroup' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'Not in any managed group'
         }
     }
 }

@@ -43,20 +43,21 @@ In the Entra admin center (**Identity > Applications > App registrations**):
 
 ## 4. Grant Graph application permissions
 
-Go to **API permissions > Add a permission > Microsoft Graph > Application permissions** and add these four, then select **Grant admin consent for \<tenant\>**. Each row should show a green check under *Status*.
+Go to **API permissions > Add a permission > Microsoft Graph > Application permissions** and add these five, then select **Grant admin consent for \<tenant\>**. Each row should show a green check under *Status*.
 
 | Permission | What the script uses it for |
 |---|---|
-| `User.ReadWrite.All` | Find users by `employeeId` and by UPN, create users, update department and job title, read and assign managers |
+| `User.ReadWrite.All` | Find users by `employeeId` and by UPN, create users, update department and job title, read and assign managers, disable leavers |
+| `User.RevokeSessions.All` | Revoke a leaver's sign-in sessions |
 | `Group.Create` | Create the `DEPT-*` security groups |
 | `Group.Read.All` | List the `DEPT-*` groups |
-| `GroupMember.ReadWrite.All` | Read group membership, add users to their department group and remove movers from their old one |
+| `GroupMember.ReadWrite.All` | Read group membership, add users to their department group, and remove movers and leavers from groups |
 
 These are **application** permissions: they apply tenant-wide with no signed-in user, so treat the certificate like a privileged credential.
 
 ### Why each permission is needed
 
-Every Graph call the script makes, and the least-privileged application permission Microsoft's documentation lists for it (Joiner calls checked 2026-11-13, Mover calls 2026-11-14):
+Every Graph call the script makes, and the least-privileged application permission Microsoft's documentation lists for it (Joiner calls checked 2026-11-13, Mover and Leaver calls 2026-11-14):
 
 | Script step | Graph call | Least-privileged application permission per the docs |
 |---|---|---|
@@ -69,15 +70,21 @@ Every Graph call the script makes, and the least-privileged application permissi
 | Create a department group | `POST /groups` | `Group.Create` |
 | List a group's members | `GET /groups/{id}/members` | `GroupMember.ReadBasic.All` (`GroupMember.ReadWrite.All` is also accepted) |
 | Add a user to a group | `POST /groups/{id}/members/$ref` | **`GroupMember.ReadWrite.All`** |
-| Remove a mover from their old group | `DELETE /groups/{id}/members/{userId}/$ref` | **`GroupMember.ReadWrite.All`** |
+| Remove a mover or leaver from a group | `DELETE /groups/{id}/members/{userId}/$ref` | **`GroupMember.ReadWrite.All`** |
+| Disable a leaver | `PATCH /users/{id}` with `accountEnabled: false` | `User.EnableDisableAccount.All` + `User.Read.All` (`User.ReadWrite.All` is listed as higher privileged) |
+| Revoke a leaver's sessions | `POST /users/{id}/revokeSignInSessions` | **`User.RevokeSessions.All`** (no higher application permission is listed) |
 
-**`User.ReadWrite.All` is the only user permission you need.** Assigning a manager requires it, and it already covers the narrower `User.Read.All` (lookups), `User.Create` (creating users) and `User.ReadUpdate.All` (updating department and job title). Granting those as well would add nothing.
+**`User.ReadWrite.All` is the main user permission.** Assigning a manager requires it, and it already covers the narrower `User.Read.All` (lookups), `User.Create` (creating users), `User.ReadUpdate.All` (updating department and job title) and `User.EnableDisableAccount.All` (disabling leavers). Granting those as well would add nothing.
+
+**`User.RevokeSessions.All` is the one permission the Leaver adds.** For application permissions, Microsoft lists it as the *only* permission for `revokeSignInSessions`: `User.ReadWrite.All` and `Directory.ReadWrite.All` are listed for delegated access only. Without it, `RevokeSessions` fails with `403` even though the disable works.
+
+**Disabling admins is out of reach on purpose.** For a user who holds an admin role, updating `accountEnabled` also needs the app itself to hold a higher-privileged admin role. The app has no directory roles, so a leaver who is an admin is logged as `DisableUser Failed` and must be offboarded by a person.
 
 **`Group.Create` plus `Group.Read.All` instead of `Group.ReadWrite.All`.** The script needs to create groups and look them up, but never edits or deletes one. `Group.ReadWrite.All` would also let the app modify or delete any group in the tenant.
 
 **`GroupMember.ReadWrite.All`** is the only application permission listed for adding and removing group members, and it is also accepted for listing them. It can't change a group's properties. The Mover phase needed no new permissions.
 
-**Not granted on purpose:** `Directory.ReadWrite.All` (a catch-all that covers everything above and much more), `Group.ReadWrite.All`, `User.Create`, `User.Read.All` and `User.ReadUpdate.All` (redundant with `User.ReadWrite.All`), and anything role-related. The script doesn't touch roles, licenses, passwords or role-assignable groups.
+**Not granted on purpose:** `Directory.ReadWrite.All` (a catch-all that covers everything above and much more), `Group.ReadWrite.All`, `User.Create`, `User.Read.All`, `User.ReadUpdate.All` and `User.EnableDisableAccount.All` (redundant with `User.ReadWrite.All`), `User.DeleteRestore.All` (the script never deletes users), and anything role-related. The script doesn't touch roles, licenses, passwords or role-assignable groups.
 
 ### Verified on a live tenant
 
@@ -89,9 +96,9 @@ Three behaviours the documentation left unclear turned out like this:
 - **Groups created with `Group.Create` accept new members.** Microsoft notes that a group created with `Group.Create` and no owners is created anonymously and "isn't modifiable". The script never edits group properties, and adding members to the groups it created worked with `GroupMember.ReadWrite.All`. If another tenant returns a `403` here, replace `Group.Create` and `Group.Read.All` with `Group.ReadWrite.All` and note the change.
 - **The `employeeId` filter works as a normal `$filter`.** Existing users were matched on it without the `ConsistencyLevel: eventual` header. If another tenant rejects it with `Request_UnsupportedQuery`, add the header.
 
-Sources (Microsoft Learn, Graph v1.0): [Create user](https://learn.microsoft.com/en-us/graph/api/user-post-users), [List users](https://learn.microsoft.com/en-us/graph/api/user-list), [Update user](https://learn.microsoft.com/en-us/graph/api/user-update), [Assign manager](https://learn.microsoft.com/en-us/graph/api/user-post-manager), [List manager](https://learn.microsoft.com/en-us/graph/api/user-list-manager), [Create group](https://learn.microsoft.com/en-us/graph/api/group-post-groups), [List groups](https://learn.microsoft.com/en-us/graph/api/group-list), [Add members](https://learn.microsoft.com/en-us/graph/api/group-post-members), [Remove member](https://learn.microsoft.com/en-us/graph/api/group-delete-members), [List group members](https://learn.microsoft.com/en-us/graph/api/group-list-members).
+The Leaver phase was verified the same way on 2026-11-14 with `samples/hr_export_leavers.csv`, after adding `User.RevokeSessions.All`. The dry run showed the 9 expected actions. The live run applied all 9 (3 `DisableUser`, 3 `RevokeSessions`, 3 `RemoveFromGroup`), and the re-run skipped everything. `User.ReadWrite.All` was enough to disable non-admin users; the separate `User.EnableDisableAccount.All` wasn't needed.
 
-When Leaver is added (for example disabling accounts or revoking sessions), any extra permissions will be listed here.
+Sources (Microsoft Learn, Graph v1.0): [Create user](https://learn.microsoft.com/en-us/graph/api/user-post-users), [List users](https://learn.microsoft.com/en-us/graph/api/user-list), [Update user](https://learn.microsoft.com/en-us/graph/api/user-update), [Revoke sign-in sessions](https://learn.microsoft.com/en-us/graph/api/user-revokesigninsessions), [Assign manager](https://learn.microsoft.com/en-us/graph/api/user-post-manager), [List manager](https://learn.microsoft.com/en-us/graph/api/user-list-manager), [Create group](https://learn.microsoft.com/en-us/graph/api/group-post-groups), [List groups](https://learn.microsoft.com/en-us/graph/api/group-list), [Add members](https://learn.microsoft.com/en-us/graph/api/group-post-members), [Remove member](https://learn.microsoft.com/en-us/graph/api/group-delete-members), [List group members](https://learn.microsoft.com/en-us/graph/api/group-list-members).
 
 ## 5. Run it
 
@@ -140,6 +147,38 @@ When the small batch shows no `Failed` rows, run the full file without `-WhatIf`
 
 The dry run should show exactly those 7 actions as `WhatIf` and everything else as `Skipped`. Run it again without `-WhatIf` to apply them, then once more to confirm only `Skipped` remains. Running the original `hr_export.csv` afterwards moves the three back.
 
+### Try the Leaver phase
+
+The app registration needs `User.RevokeSessions.All` first (step 4). Add it and grant admin consent again.
+
+[`samples/hr_export_leavers.csv`](../samples/hr_export_leavers.csv) is `hr_export.csv` with three employees set to `Terminated`. None of them manages anyone. Run `hr_export.csv` first if the Mover sample is still applied, so the only changes left are the leavers.
+
+| Employee | Expected actions |
+|---|---|
+| E1007 Carlos Mendoza (Operations) | `DisableUser`, `RevokeSessions`, `RemoveFromGroup` DEPT-Operations |
+| E1025 Victor Almeida (Sales) | `DisableUser`, `RevokeSessions`, `RemoveFromGroup` DEPT-Sales |
+| E1038 Dmitri Volkov (IT) | `DisableUser`, `RevokeSessions`, `RemoveFromGroup` DEPT-IT |
+
+```powershell
+./src/Invoke-JML.ps1 <same parameters as above> -CsvPath ./samples/hr_export_leavers.csv -WhatIf
+```
+
+The dry run should show those 9 actions as `WhatIf` and everything else as `Skipped`. Run it without `-WhatIf` to apply them, then once more: the re-run should show only `Skipped`. The `RevokeSessions` row is the one that proves the new permission works.
+
+To see the rehire safeguard, run `hr_export.csv` again afterwards. The three leavers are `Active` there but disabled in the tenant, so each gets a `CheckAccountEnabled Failed` row and nothing else is changed for them. The script never re-enables an account. To bring one back, enable it in the admin center and re-run: they're added back to their department group.
+
+### Clean up the lab
+
+Turn every employee into a leaver with a temporary copy of the export, then run it (dry run first):
+
+```powershell
+Import-Csv ./samples/hr_export.csv | ForEach-Object { $_.status = 'Terminated'; $_ } |
+    Export-Csv "$env:TEMP\hr_all_leavers.csv" -NoTypeInformation
+./src/Invoke-JML.ps1 <same parameters as above> -CsvPath "$env:TEMP\hr_all_leavers.csv" -WhatIf
+```
+
+This disables all 40 accounts, revokes their sessions and empties the `DEPT-*` groups. The script never deletes anything, and the app has no permission to. To remove the accounts and groups, delete them in the Entra admin center (**Users**, then **Groups**). Deleted users stay in **Deleted users** for 30 days and can be restored until then.
+
 ### Audit logs
 
 Each run writes `logs/jml-audit-<timestamp>.csv` inside the project folder (override with `-AuditLogPath`). The `logs/` folder is git-ignored because the logs contain names, UPNs and employee IDs. Commit a redacted copy to `samples/` if you want to show example output.
@@ -154,7 +193,10 @@ Columns: `Timestamp, Mode, Actor, Action, EmployeeId, Target, Result, Detail`. `
 - **The HR export is the source of truth for existing users (Mover).** If a user's department or job title differs from the export, it is updated (`UpdateUser`). If their manager differs, it is changed (`SetManager`, with the old and new manager in the log). An empty job title or manager in the export leaves the tenant value alone, so the script never clears data.
 - **Department moves change access.** The user is added to the new `DEPT-<Department>` group and removed from every other department group the script manages (`RemoveFromGroup`). A group counts as managed if its description ends with `(managed by Invoke-JML)` (the script sets this on groups it creates) or it is the group of a department in the export. Other groups, even ones whose name starts with `DEPT-`, are never touched.
 - **Never renames** a user. A changed display name in the export doesn't change the UPN or display name in the tenant.
-- **Skips** rows whose status isn't `Active` and logs them. Leaver handling isn't built yet.
+- **Leavers (`Terminated`)** are disabled, have their sign-in sessions revoked and are removed from every group the script manages. The user, their attributes and their manager are kept so the account can be reviewed, then deleted by a person after the retention period. If HR still lists a leaver as the manager of Active employees, the run prints a warning and notes it in the `DisableUser` row. It doesn't reassign them.
+- **Never re-enables an account.** An `Active` row whose account is disabled gets `CheckAccountEnabled Failed`, and nothing else is changed for that user. A rehire and an account disabled after a security incident look the same to the script, so a person decides.
+- **Skips** rows with any other status (for example `OnLeave`) and logs them.
+- **Never deletes** users or groups.
 - **Passwords:** new accounts get a random password that is never displayed or logged. To sign in as a lab user, issue a Temporary Access Pass or reset the password in the admin center.
 - **No licenses** are assigned by the script.
 
@@ -169,4 +211,7 @@ Columns: `Timestamp, Mode, Actor, Action, EmployeeId, Target, Result, Detail`. `
 | `Request_UnsupportedQuery` on the `employeeId` lookup | The filter needs the `ConsistencyLevel: eventual` header; see "Verified on a live tenant" in step 4 |
 | `SetManager` is `Failed` with "Could not read current manager" | The manager read was denied or errored; see "Verified on a live tenant" in step 4. The current manager is left unchanged |
 | `UpdateUser` or `RemoveFromGroup` is `Failed` with `Insufficient privileges` | `User.ReadWrite.All` or `GroupMember.ReadWrite.All` is missing admin consent |
+| `RevokeSessions` is `Failed` with `403` or `Authorization_RequestDenied` | `User.RevokeSessions.All` is missing or not consented. `User.ReadWrite.All` doesn't cover it for apps. The account is still disabled, and a disabled account can't redeem refresh tokens. Re-enabling and re-running would retry the revoke |
+| `DisableUser` is `Failed` with `Insufficient privileges` | The leaver holds an admin role; the app can only disable non-admin users. Offboard them by hand |
+| `CheckAccountEnabled` is `Failed` | The user is `Active` in the HR export but disabled in the tenant. Find out why. For a rehire, enable the account in the admin center and re-run |
 | The run stops with "Active rows with no department" | Every Active row in the HR export needs a department, because it decides group membership |

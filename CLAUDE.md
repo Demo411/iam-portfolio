@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An identity and access management (IAM) portfolio of five numbered, self-contained projects. The remote is the public GitHub repo `Demo411/iam-portfolio` (branch `main`), so everything committed is publicly visible.
 
-Only Project 01 has code so far: its Joiner and Mover phases (Leaver is not built). Projects 02-05 are folders with empty READMEs. The root `README.md` has a project table with a Status column; keep it in sync with reality (01 is "In progress", the rest "Planned").
+Only Project 01 has code so far: its Joiner, Mover and Leaver phases, all verified on the lab tenant. Projects 02-05 are folders with empty READMEs. The root `README.md` has a project table with a Status column; keep it in sync with reality (01 is "In progress", the rest "Planned").
 
 All projects use one fictional company, Contoso Logistics (Finance, Sales, IT, Operations).
 
@@ -29,7 +29,7 @@ There is no build step, linter or test suite. The script is `01-bulk-user-provis
 ```
 
 - It needs **PowerShell 7** (`pwsh`), not Windows PowerShell 5.1, plus the `Microsoft.Graph.Authentication`, `.Users` and `.Groups` modules.
-- It authenticates as an app registration with a certificate. `docs/setup.md` has the full setup and the four Graph application permissions it needs (checked against Microsoft Learn); keep that list in sync with any new Graph call.
+- It authenticates as an app registration with a certificate. `docs/setup.md` has the full setup and the five Graph application permissions it needs (checked against Microsoft Learn); keep that list in sync with any new Graph call.
 - Always dry-run (`-WhatIf`) before a live run. A dry run reads the tenant but writes nothing.
 
 Behaviour that is easy to break:
@@ -40,6 +40,7 @@ Behaviour that is easy to break:
 - **`-WhatIf` is inherited by every cmdlet the script calls**, including `Export-Csv` and `New-Item`. The audit log writes use `-WhatIf:$false` so a dry run still produces its log. New code that must run during a dry run needs the same.
 - **Audit logs** go to `01-bulk-user-provisioning/logs/` (git-ignored). They contain real names, UPNs and IDs, so a redacted copy must be made by hand before anything goes in `samples/`.
 - A failed read (for example a manager lookup) must never be treated as "nothing there", because that leads to overwriting existing data.
+- **The script never re-enables or deletes an account.** `Terminated` rows are disabled, have sessions revoked and lose managed-group access. An `Active` row whose account is disabled is logged as `CheckAccountEnabled Failed` and left alone (a rehire and a security disable look the same).
 
 ## Secrets and tenant details
 
