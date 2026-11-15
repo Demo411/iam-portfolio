@@ -3,22 +3,28 @@
 
 <#
 .SYNOPSIS
-    Joiner-mover-leaver automation driven by an HR CSV export (Joiner phase only).
+    Joiner-mover-leaver automation driven by an HR CSV export (Joiner and Mover phases).
 
 .DESCRIPTION
-    For every row with status 'Active' in the HR export this script:
+    The HR export is the source of truth. For every row with status 'Active' this script:
       1. Ensures a department security group exists ("<GroupPrefix><Department>").
-      2. Finds the user by employeeId. If there is no match, it creates the user with a UPN
-         derived from the display name. employeeId is the identity key: a UPN is only derived
-         when creating.
-      3. Sets the manager if the user has none.
-      4. Adds the user to the department group if not already a member.
+      2. Finds the user by employeeId.
+         - Joiner: no match, so it creates the user with a UPN derived from the display name.
+           employeeId is the identity key: a UPN is only derived when creating.
+         - Mover: a match whose department or job title differs from the HR export is updated.
+      3. Sets the manager when the user has none, or changes it when it differs from the HR export.
+      4. Adds the user to their department group, and removes them from any other department
+         group this script manages (a mover loses the old department's access).
 
     If the derived UPN is already taken by a user with a different employeeId, the row is
     logged as Failed (it is never silently skipped or adopted).
 
     Rows with any other status are logged as skipped (Leaver handling is not implemented yet).
-    Existing users' attributes are never overwritten; reconciling changes is the Mover phase.
+    The script never renames a user (UPN or display name) and never removes a manager.
+
+    A department group counts as managed by this script if its description ends with
+    '(managed by Invoke-JML)' (the script sets this when it creates one) or it is the group of
+    a department in the HR export. Users are only ever removed from managed groups.
 
     The script is idempotent: re-running it only does the work that is still missing.
     It authenticates as an app registration with a certificate (no secrets, no interactive login).
@@ -122,7 +128,7 @@ function Convert-ManagerUpn {
 function Get-UserByEmployeeId {
     param([string] $EmployeeId)
     $escaped = $EmployeeId -replace "'", "''"
-    $found = @(Get-MgUser -Filter "employeeId eq '$escaped'" -Property Id, UserPrincipalName, EmployeeId)
+    $found = @(Get-MgUser -Filter "employeeId eq '$escaped'" -Property Id, UserPrincipalName, EmployeeId, Department, JobTitle)
     if ($found.Count -gt 1) {
         throw "employeeId $EmployeeId matches $($found.Count) users: $($found.UserPrincipalName -join ', ')"
     }
@@ -136,18 +142,21 @@ function Get-UserByUpn {
         Select-Object -First 1
 }
 
-function Test-HasManager {
+function Get-CurrentManager {
+    # Returns the user's current manager (Id and a display Label), or $null if they have none.
     # Only a 404 means "no manager". Any other error is rethrown so it is never mistaken for
     # "no manager" (which would lead to overwriting an existing manager).
     param([string] $UserId)
     try {
-        $null = Get-MgUserManager -UserId $UserId -ErrorAction Stop
-        return $true
+        $m = Get-MgUserManager -UserId $UserId -ErrorAction Stop
     }
     catch {
-        if ($_.Exception.Message -match 'NotFound|ResourceNotFound|does not exist') { return $false }
+        if ($_.Exception.Message -match 'NotFound|ResourceNotFound|does not exist') { return $null }
         throw
     }
+    $props = $m.AdditionalProperties
+    $label = if ($props -and $props.ContainsKey('userPrincipalName')) { $props['userPrincipalName'] } else { $m.Id }
+    [pscustomobject]@{ Id = $m.Id; Label = $label }
 }
 
 function New-RandomPassword {
@@ -216,6 +225,10 @@ if ($duplicateIds.Count -gt 0) { throw "Duplicate employeeId values: $($duplicat
 
 $active = @($rows | Where-Object status -eq 'Active')
 
+# The department decides group membership, so an Active row without one is a data error.
+$noDept = @($active | Where-Object { -not $_.department })
+if ($noDept.Count -gt 0) { throw "Active rows with no department: $($noDept.employeeId -join ', ')" }
+
 # Two different people can derive the same UPN (same name). Catch it before touching the tenant.
 $duplicateUpns = @($active | Group-Object { Get-UpnFromName $_.displayName } | Where-Object Count -gt 1)
 if ($duplicateUpns.Count -gt 0) { throw "Rows derive the same UPN: $($duplicateUpns.Name -join ', ')" }
@@ -235,23 +248,35 @@ Connect-MgGraph -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $
 Write-Audit -Action 'Connect' -Result 'Success' -Target $TenantId -Detail "Certificate auth as app $ClientId"
 
 try {
-    # 1. Department groups
+    # 1. Department groups. Read every group with the prefix once: it finds the existing
+    #    department groups and the managed groups a mover may need to be removed from.
+    #    If this read fails the run stops, rather than treating it as "no groups".
+    $managedMarker = '(managed by Invoke-JML)'
+    $escapedPrefix = $GroupPrefix -replace "'", "''"
+    $prefixGroups = @(Get-MgGroup -Filter "startswith(displayName,'$escapedPrefix')" -All -Property Id, DisplayName, Description)
+    $managedGroups = @{}   # displayName -> id of groups users may be removed from
+    foreach ($g in $prefixGroups) {
+        if ($g.Description -and $g.Description.EndsWith($managedMarker)) { $managedGroups[$g.DisplayName] = $g.Id }
+    }
+
     $groupIds = @{}
     foreach ($dept in ($active.department | Sort-Object -Unique)) {
         $groupName = "$GroupPrefix$dept"
-        $group = Get-MgGroup -Filter "displayName eq '$groupName'" | Select-Object -First 1
+        $group = $prefixGroups | Where-Object DisplayName -eq $groupName | Select-Object -First 1
         if ($group) {
             $groupIds[$dept] = $group.Id
+            $managedGroups[$groupName] = $group.Id
             Write-Audit -Action 'CreateGroup' -Result 'Skipped' -Target $groupName -Detail 'Group already exists'
             continue
         }
         if ($PSCmdlet.ShouldProcess($groupName, 'Create security group')) {
             try {
                 $group = New-MgGroup -DisplayName $groupName `
-                    -Description "Contoso Logistics $dept department (managed by Invoke-JML)" `
+                    -Description "Contoso Logistics $dept department $managedMarker" `
                     -MailEnabled:$false -MailNickname ($groupName -replace '[^A-Za-z0-9]', '') `
                     -SecurityEnabled:$true
                 $groupIds[$dept] = $group.Id
+                $managedGroups[$groupName] = $group.Id
                 Write-Audit -Action 'CreateGroup' -Result 'Success' -Target $groupName -Detail "Id $($group.Id)"
             }
             catch {
@@ -284,6 +309,39 @@ try {
             $userUpns[$empId] = $existing.UserPrincipalName
             Write-Audit -Action 'CreateUser' -Result 'Skipped' -EmployeeId $empId -Target $existing.UserPrincipalName `
                 -Detail 'Matched existing user on employeeId'
+
+            # Mover: bring department and job title in line with the HR export. An empty job
+            # title in the export leaves the tenant value alone.
+            $changes = @{}
+            $changeText = @()
+            if ($existing.Department -cne $r.department) {
+                $changes.department = $r.department
+                $changeText += "department '$($existing.Department)' -> '$($r.department)'"
+            }
+            if ($r.jobTitle -and $existing.JobTitle -cne $r.jobTitle) {
+                $changes.jobTitle = $r.jobTitle
+                $changeText += "jobTitle '$($existing.JobTitle)' -> '$($r.jobTitle)'"
+            }
+            $changeDetail = $changeText -join '; '
+
+            if ($changes.Count -eq 0) {
+                Write-Audit -Action 'UpdateUser' -Result 'Skipped' -EmployeeId $empId -Target $existing.UserPrincipalName `
+                    -Detail 'Department and job title match the HR export'
+            }
+            elseif ($PSCmdlet.ShouldProcess($existing.UserPrincipalName, "Update $changeDetail")) {
+                try {
+                    Update-MgUser -UserId $existing.Id -BodyParameter $changes
+                    Write-Audit -Action 'UpdateUser' -Result 'Success' -EmployeeId $empId -Target $existing.UserPrincipalName -Detail $changeDetail
+                }
+                catch {
+                    $failures++
+                    Write-Audit -Action 'UpdateUser' -Result 'Failed' -EmployeeId $empId -Target $existing.UserPrincipalName `
+                        -Detail "$changeDetail; $($_.Exception.Message)"
+                }
+            }
+            else {
+                Write-Audit -Action 'UpdateUser' -Result $declined -EmployeeId $empId -Target $existing.UserPrincipalName -Detail $changeDetail
+            }
             continue
         }
 
@@ -332,7 +390,7 @@ try {
         }
     }
 
-    # 3. Manager and department group membership
+    # 3. Manager and department group membership (Joiner and Mover)
     foreach ($r in $active) {
         $empId = $r.employeeId
         $userId = $userIds[$empId]
@@ -342,19 +400,21 @@ try {
         if (-not $userId -and -not $isPlanned) {
             Write-Audit -Action 'SetManager' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'No user resolved (lookup or create failed)'
             Write-Audit -Action 'AddToGroup' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'No user resolved (lookup or create failed)'
+            Write-Audit -Action 'RemoveFromGroup' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'No user resolved (lookup or create failed)'
             continue
         }
 
-        # Manager
+        # Manager: set it if missing, change it if it differs from the HR export. An empty
+        # manager in the export never removes an existing one.
         if (-not $r.manager) {
             Write-Audit -Action 'SetManager' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'No manager in HR export'
         }
         else {
             $manager = Resolve-Manager $r.manager
-            $hasManager = $false
+            $current = $null
             $checkFailed = $false
             if ($userId) {
-                try { $hasManager = Test-HasManager $userId }
+                try { $current = Get-CurrentManager $userId }
                 catch {
                     $checkFailed = $true
                     $failures++
@@ -366,26 +426,31 @@ try {
             if ($checkFailed) {
                 # already logged; leave the manager untouched
             }
-            elseif ($hasManager) {
-                Write-Audit -Action 'SetManager' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'Manager already set'
-            }
             elseif (-not $manager.Id -and -not $manager.Planned) {
+                # Leave any current manager alone rather than guess.
                 $failures++
                 Write-Audit -Action 'SetManager' -Result 'Failed' -EmployeeId $empId -Target $upn -Detail "Manager $($manager.Label) not found"
             }
-            elseif ($PSCmdlet.ShouldProcess($upn, "Set manager to $($manager.Label)")) {
-                try {
-                    Set-MgUserManagerByRef -UserId $userId `
-                        -BodyParameter @{ '@odata.id' = "https://graph.microsoft.com/v1.0/users/$($manager.Id)" }
-                    Write-Audit -Action 'SetManager' -Result 'Success' -EmployeeId $empId -Target $upn -Detail "Manager $($manager.Label)"
-                }
-                catch {
-                    $failures++
-                    Write-Audit -Action 'SetManager' -Result 'Failed' -EmployeeId $empId -Target $upn -Detail $_.Exception.Message
-                }
+            elseif ($current -and $manager.Id -and $current.Id -eq $manager.Id) {
+                Write-Audit -Action 'SetManager' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail "Manager already $($manager.Label)"
             }
             else {
-                Write-Audit -Action 'SetManager' -Result $declined -EmployeeId $empId -Target $upn -Detail "Manager $($manager.Label)"
+                $managerDetail = if ($current) { "Manager $($current.Label) -> $($manager.Label)" } else { "Manager $($manager.Label)" }
+                if ($PSCmdlet.ShouldProcess($upn, $managerDetail)) {
+                    try {
+                        Set-MgUserManagerByRef -UserId $userId `
+                            -BodyParameter @{ '@odata.id' = "https://graph.microsoft.com/v1.0/users/$($manager.Id)" }
+                        Write-Audit -Action 'SetManager' -Result 'Success' -EmployeeId $empId -Target $upn -Detail $managerDetail
+                    }
+                    catch {
+                        $failures++
+                        Write-Audit -Action 'SetManager' -Result 'Failed' -EmployeeId $empId -Target $upn `
+                            -Detail "$managerDetail; $($_.Exception.Message)"
+                    }
+                }
+                else {
+                    Write-Audit -Action 'SetManager' -Result $declined -EmployeeId $empId -Target $upn -Detail $managerDetail
+                }
             }
         }
 
@@ -412,6 +477,35 @@ try {
         }
         else {
             Write-Audit -Action 'AddToGroup' -Result $declined -EmployeeId $empId -Target $upn -Detail $groupName
+        }
+
+        # Old department groups (Mover): remove the user from every other managed group.
+        # A user who is only planned (dry run) has no memberships yet.
+        $removed = 0
+        if ($userId) {
+            foreach ($oldName in ($managedGroups.Keys | Where-Object { $_ -ne $groupName } | Sort-Object)) {
+                $oldId = $managedGroups[$oldName]
+                if (-not (Get-GroupMemberIds $oldId).Contains($userId)) { continue }
+                $removed++
+                if ($PSCmdlet.ShouldProcess($upn, "Remove from group $oldName")) {
+                    try {
+                        Remove-MgGroupMemberDirectoryObjectByRef -GroupId $oldId -DirectoryObjectId $userId
+                        [void](Get-GroupMemberIds $oldId).Remove($userId)
+                        Write-Audit -Action 'RemoveFromGroup' -Result 'Success' -EmployeeId $empId -Target $upn -Detail $oldName
+                    }
+                    catch {
+                        $failures++
+                        Write-Audit -Action 'RemoveFromGroup' -Result 'Failed' -EmployeeId $empId -Target $upn `
+                            -Detail "$oldName; $($_.Exception.Message)"
+                    }
+                }
+                else {
+                    Write-Audit -Action 'RemoveFromGroup' -Result $declined -EmployeeId $empId -Target $upn -Detail $oldName
+                }
+            }
+        }
+        if ($removed -eq 0) {
+            Write-Audit -Action 'RemoveFromGroup' -Result 'Skipped' -EmployeeId $empId -Target $upn -Detail 'Not in any other department group'
         }
     }
 }

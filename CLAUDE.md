@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An identity and access management (IAM) portfolio of five numbered, self-contained projects. The remote is the public GitHub repo `Demo411/iam-portfolio` (branch `main`), so everything committed is publicly visible.
 
-Only Project 01 has code so far, and only its Joiner phase (Mover and Leaver are not built). Projects 02-05 are folders with empty READMEs. The root `README.md` has a project table with a Status column; keep it in sync with reality (01 is "In progress", the rest "Planned").
+Only Project 01 has code so far: its Joiner and Mover phases (Leaver is not built). Projects 02-05 are folders with empty READMEs. The root `README.md` has a project table with a Status column; keep it in sync with reality (01 is "In progress", the rest "Planned").
 
 All projects use one fictional company, Contoso Logistics (Finance, Sales, IT, Operations).
 
@@ -35,6 +35,7 @@ There is no build step, linter or test suite. The script is `01-bulk-user-provis
 Behaviour that is easy to break:
 
 - **`employeeId` is the identity key.** Users are matched on it; a UPN is derived from the display name only when creating a user. A derived UPN already used by a different `employeeId` is logged as `Failed`, never skipped or adopted.
+- **The HR CSV is the source of truth for department, job title and manager**, but an empty value never clears tenant data, and users are only removed from groups the script manages (description ends with `(managed by Invoke-JML)`, or the group of a department in the CSV).
 - **The script is idempotent.** A re-run against an up-to-date tenant must produce only `Skipped` results.
 - **`-WhatIf` is inherited by every cmdlet the script calls**, including `Export-Csv` and `New-Item`. The audit log writes use `-WhatIf:$false` so a dry run still produces its log. New code that must run during a dry run needs the same.
 - **Audit logs** go to `01-bulk-user-provisioning/logs/` (git-ignored). They contain real names, UPNs and IDs, so a redacted copy must be made by hand before anything goes in `samples/`.

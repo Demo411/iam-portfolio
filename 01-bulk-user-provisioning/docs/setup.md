@@ -47,39 +47,41 @@ Go to **API permissions > Add a permission > Microsoft Graph > Application permi
 
 | Permission | What the script uses it for |
 |---|---|
-| `User.ReadWrite.All` | Find users by `employeeId` and by UPN, create users, read and assign managers |
+| `User.ReadWrite.All` | Find users by `employeeId` and by UPN, create users, update department and job title, read and assign managers |
 | `Group.Create` | Create the `DEPT-*` security groups |
-| `Group.Read.All` | Look up a department group by display name |
-| `GroupMember.ReadWrite.All` | Read group membership and add users to their department group |
+| `Group.Read.All` | List the `DEPT-*` groups |
+| `GroupMember.ReadWrite.All` | Read group membership, add users to their department group and remove movers from their old one |
 
 These are **application** permissions: they apply tenant-wide with no signed-in user, so treat the certificate like a privileged credential.
 
 ### Why each permission is needed
 
-Every Graph call the script makes, and the least-privileged application permission Microsoft's documentation lists for it (checked 2026-11-13):
+Every Graph call the script makes, and the least-privileged application permission Microsoft's documentation lists for it (Joiner calls checked 2026-11-13, Mover calls 2026-11-14):
 
 | Script step | Graph call | Least-privileged application permission per the docs |
 |---|---|---|
 | Find a user by `employeeId` or UPN | `GET /users?$filter=...` | `User.Read.All` |
 | Create a user | `POST /users` | `User.Create` |
-| Check whether a user has a manager | `GET /users/{id}/manager` | see "Verified on a live tenant" below |
-| Set a manager | `PUT /users/{id}/manager/$ref` | **`User.ReadWrite.All`** |
-| Find a department group | `GET /groups?$filter=displayName eq ...` | `Group.Read.All` (the docs also list broader options) |
+| Update department and job title (Mover) | `PATCH /users/{id}` | `User.ReadUpdate.All` |
+| Read a user's current manager | `GET /users/{id}/manager` | see "Verified on a live tenant" below |
+| Set or change a manager | `PUT /users/{id}/manager/$ref` | **`User.ReadWrite.All`** |
+| List the department groups | `GET /groups?$filter=startswith(displayName,'DEPT-')` | `Group.Read.All` (the docs also list broader options) |
 | Create a department group | `POST /groups` | `Group.Create` |
 | List a group's members | `GET /groups/{id}/members` | `GroupMember.ReadBasic.All` (`GroupMember.ReadWrite.All` is also accepted) |
 | Add a user to a group | `POST /groups/{id}/members/$ref` | **`GroupMember.ReadWrite.All`** |
+| Remove a mover from their old group | `DELETE /groups/{id}/members/{userId}/$ref` | **`GroupMember.ReadWrite.All`** |
 
-**`User.ReadWrite.All` is the only user permission you need.** Assigning a manager requires it, and it already covers the narrower `User.Read.All` (lookups) and `User.Create` (creating users). Granting those two as well would add nothing.
+**`User.ReadWrite.All` is the only user permission you need.** Assigning a manager requires it, and it already covers the narrower `User.Read.All` (lookups), `User.Create` (creating users) and `User.ReadUpdate.All` (updating department and job title). Granting those as well would add nothing.
 
 **`Group.Create` plus `Group.Read.All` instead of `Group.ReadWrite.All`.** The script needs to create groups and look them up, but never edits or deletes one. `Group.ReadWrite.All` would also let the app modify or delete any group in the tenant.
 
-**`GroupMember.ReadWrite.All`** is the only application permission listed for adding group members, and it is also accepted for listing them. It can't change a group's properties.
+**`GroupMember.ReadWrite.All`** is the only application permission listed for adding and removing group members, and it is also accepted for listing them. It can't change a group's properties. The Mover phase needed no new permissions.
 
-**Not granted on purpose:** `Directory.ReadWrite.All` (a catch-all that covers everything above and much more), `Group.ReadWrite.All`, `User.Create` and `User.Read.All` (redundant with `User.ReadWrite.All`), and anything role-related. The script doesn't touch roles, licenses, passwords or role-assignable groups.
+**Not granted on purpose:** `Directory.ReadWrite.All` (a catch-all that covers everything above and much more), `Group.ReadWrite.All`, `User.Create`, `User.Read.All` and `User.ReadUpdate.All` (redundant with `User.ReadWrite.All`), and anything role-related. The script doesn't touch roles, licenses, passwords or role-assignable groups.
 
 ### Verified on a live tenant
 
-The permission list was checked against Microsoft Learn, then exercised end to end in a Microsoft Entra lab tenant on 2026-11-14: a dry run, a 3-user test run, a full 40-user run and a re-run. The four permissions above were enough and nothing failed. The re-run skipped every action, so the script is idempotent in practice.
+The Joiner permission list was checked against Microsoft Learn, then exercised end to end in a Microsoft Entra lab tenant on 2026-11-14: a dry run, a 3-user test run, a full 40-user run and a re-run. The Mover phase was verified the same way, also on 2026-11-14, using `samples/hr_export_movers.csv`: a dry run showed the 7 expected changes, the live run applied all 7 (2 `UpdateUser`, 3 `SetManager`, 1 `AddToGroup`, 1 `RemoveFromGroup`) with the same four permissions, and a re-run skipped everything. The four permissions above were enough and nothing failed. The re-run skipped every action, so the script is idempotent in practice.
 
 Three behaviours the documentation left unclear turned out like this:
 
@@ -87,9 +89,9 @@ Three behaviours the documentation left unclear turned out like this:
 - **Groups created with `Group.Create` accept new members.** Microsoft notes that a group created with `Group.Create` and no owners is created anonymously and "isn't modifiable". The script never edits group properties, and adding members to the groups it created worked with `GroupMember.ReadWrite.All`. If another tenant returns a `403` here, replace `Group.Create` and `Group.Read.All` with `Group.ReadWrite.All` and note the change.
 - **The `employeeId` filter works as a normal `$filter`.** Existing users were matched on it without the `ConsistencyLevel: eventual` header. If another tenant rejects it with `Request_UnsupportedQuery`, add the header.
 
-Sources (Microsoft Learn, Graph v1.0): [Create user](https://learn.microsoft.com/en-us/graph/api/user-post-users), [List users](https://learn.microsoft.com/en-us/graph/api/user-list), [Assign manager](https://learn.microsoft.com/en-us/graph/api/user-post-manager), [List manager](https://learn.microsoft.com/en-us/graph/api/user-list-manager), [Create group](https://learn.microsoft.com/en-us/graph/api/group-post-groups), [List groups](https://learn.microsoft.com/en-us/graph/api/group-list), [Add members](https://learn.microsoft.com/en-us/graph/api/group-post-members), [List group members](https://learn.microsoft.com/en-us/graph/api/group-list-members).
+Sources (Microsoft Learn, Graph v1.0): [Create user](https://learn.microsoft.com/en-us/graph/api/user-post-users), [List users](https://learn.microsoft.com/en-us/graph/api/user-list), [Update user](https://learn.microsoft.com/en-us/graph/api/user-update), [Assign manager](https://learn.microsoft.com/en-us/graph/api/user-post-manager), [List manager](https://learn.microsoft.com/en-us/graph/api/user-list-manager), [Create group](https://learn.microsoft.com/en-us/graph/api/group-post-groups), [List groups](https://learn.microsoft.com/en-us/graph/api/group-list), [Add members](https://learn.microsoft.com/en-us/graph/api/group-post-members), [Remove member](https://learn.microsoft.com/en-us/graph/api/group-delete-members), [List group members](https://learn.microsoft.com/en-us/graph/api/group-list-members).
 
-When Mover and Leaver are added (for example disabling accounts or revoking sessions), any extra permissions will be listed here.
+When Leaver is added (for example disabling accounts or revoking sessions), any extra permissions will be listed here.
 
 ## 5. Run it
 
@@ -122,6 +124,22 @@ Get-Content .\samples\hr_export.csv | Select-Object -First 4 | Set-Content "$env
 
 When the small batch shows no `Failed` rows, run the full file without `-WhatIf`. The 3 test users are matched on `employeeId` and skipped. Re-running is safe: users, managers and memberships that already exist are skipped.
 
+### Try the Mover phase
+
+[`samples/hr_export_movers.csv`](../samples/hr_export_movers.csv) is the same HR export with three changes, run against a tenant the full file has already been loaded into:
+
+| Employee | Change | Expected actions |
+|---|---|---|
+| E1015 Laura Jensen | Finance Financial Analyst → Sales, Sales Operations Analyst, new manager Daniel Okafor | `UpdateUser`, `SetManager`, `AddToGroup` DEPT-Sales, `RemoveFromGroup` DEPT-Finance |
+| E1036 Omar Farouk | Promoted to Service Desk Lead, now reports to Hannah Brooks | `UpdateUser`, `SetManager` |
+| E1009 James Whelan | Now reports to Elena Vasquez | `SetManager` |
+
+```powershell
+./src/Invoke-JML.ps1 <same parameters as above> -CsvPath ./samples/hr_export_movers.csv -WhatIf
+```
+
+The dry run should show exactly those 7 actions as `WhatIf` and everything else as `Skipped`. Run it again without `-WhatIf` to apply them, then once more to confirm only `Skipped` remains. Running the original `hr_export.csv` afterwards moves the three back.
+
 ### Audit logs
 
 Each run writes `logs/jml-audit-<timestamp>.csv` inside the project folder (override with `-AuditLogPath`). The `logs/` folder is git-ignored because the logs contain names, UPNs and employee IDs. Commit a redacted copy to `samples/` if you want to show example output.
@@ -133,7 +151,9 @@ Columns: `Timestamp, Mode, Actor, Action, EmployeeId, Target, Result, Detail`. `
 - **Matches users on `employeeId`**, not on the UPN. A UPN is only derived (`first.last@<UpnDomain>`) when a user has to be created. An existing user whose UPN differs from the derived one is still matched and is never renamed.
 - **UPN collisions fail loudly.** If the derived UPN is already used by an account with a different `employeeId` (or none), the row is logged as `Failed` and nothing is created or changed.
 - **Creates** each missing Active user with department, job title, employee ID, hire date and `usageLocation` (`US` by default, set with `-UsageLocation`). A usage location is required for group-based licensing. New users are added to `DEPT-<Department>`.
-- **Sets the manager** only if the user has none. Existing attributes are never overwritten (that is the Mover phase).
+- **The HR export is the source of truth for existing users (Mover).** If a user's department or job title differs from the export, it is updated (`UpdateUser`). If their manager differs, it is changed (`SetManager`, with the old and new manager in the log). An empty job title or manager in the export leaves the tenant value alone, so the script never clears data.
+- **Department moves change access.** The user is added to the new `DEPT-<Department>` group and removed from every other department group the script manages (`RemoveFromGroup`). A group counts as managed if its description ends with `(managed by Invoke-JML)` (the script sets this on groups it creates) or it is the group of a department in the export. Other groups, even ones whose name starts with `DEPT-`, are never touched.
+- **Never renames** a user. A changed display name in the export doesn't change the UPN or display name in the tenant.
 - **Skips** rows whose status isn't `Active` and logs them. Leaver handling isn't built yet.
 - **Passwords:** new accounts get a random password that is never displayed or logged. To sign in as a lab user, issue a Temporary Access Pass or reset the password in the admin center.
 - **No licenses** are assigned by the script.
@@ -147,4 +167,6 @@ Columns: `Timestamp, Mode, Actor, Action, EmployeeId, Target, Result, Detail`. `
 | `CreateUser` is `Failed` with "UPN already in use by a different employeeId" | An account with that UPN exists but belongs to someone else (or has no `employeeId`). Fix the data in the tenant or the HR export, then re-run |
 | `domain ... is not verified` or `unknown domain` on create | `-UpnDomain` isn't a verified domain in this tenant |
 | `Request_UnsupportedQuery` on the `employeeId` lookup | The filter needs the `ConsistencyLevel: eventual` header; see "Verified on a live tenant" in step 4 |
-| `SetManager` is `Failed` with "Could not read current manager" | The manager read was denied or errored; see "Verified on a live tenant" in step 4 |
+| `SetManager` is `Failed` with "Could not read current manager" | The manager read was denied or errored; see "Verified on a live tenant" in step 4. The current manager is left unchanged |
+| `UpdateUser` or `RemoveFromGroup` is `Failed` with `Insufficient privileges` | `User.ReadWrite.All` or `GroupMember.ReadWrite.All` is missing admin consent |
+| The run stops with "Active rows with no department" | Every Active row in the HR export needs a department, because it decides group membership |

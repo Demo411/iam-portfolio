@@ -1,0 +1,41 @@
+employeeId,displayName,department,jobTitle,manager,status,startDate
+E1001,Marcus Whitfield,Operations,Chief Operating Officer,,Active,2018-03-12
+E1002,Elena Vasquez,Operations,Warehouse Operations Manager,marcus.whitfield@contoso.example,Active,2019-06-03
+E1003,Tomas Novak,Operations,Fleet Manager,marcus.whitfield@contoso.example,Active,2019-09-16
+E1004,Grace Mensah,Operations,Logistics Coordinator,elena.vasquez@contoso.example,Active,2021-02-08
+E1005,Ryan Kowalski,Operations,Warehouse Supervisor,elena.vasquez@contoso.example,Active,2020-11-02
+E1006,Aisha Rahman,Operations,Dispatcher,tomas.novak@contoso.example,Active,2022-04-18
+E1007,Carlos Mendoza,Operations,Fleet Maintenance Technician,tomas.novak@contoso.example,Active,2022-08-29
+E1008,Sofia Lindqvist,Operations,Inventory Analyst,elena.vasquez@contoso.example,Active,2023-01-23
+E1009,James Whelan,Operations,Warehouse Associate,elena.vasquez@contoso.example,Active,2023-05-15
+E1010,Mei Tanaka,Operations,Customs Compliance Specialist,elena.vasquez@contoso.example,Active,2023-10-02
+E1011,Priya Raman,Finance,Finance Director,marcus.whitfield@contoso.example,Active,2018-07-23
+E1012,Oliver Hartmann,Finance,Controller,priya.raman@contoso.example,Active,2019-03-04
+E1013,Nadia Petrova,Finance,Accounts Payable Manager,oliver.hartmann@contoso.example,Active,2020-01-13
+E1014,Kevin Adeyemi,Finance,Senior Accountant,oliver.hartmann@contoso.example,Active,2020-09-21
+E1015,Laura Jensen,Sales,Sales Operations Analyst,daniel.okafor@contoso.example,Active,2021-06-14
+E1016,Samuel Ortega,Finance,Accounts Payable Clerk,nadia.petrova@contoso.example,Active,2022-02-07
+E1017,Yuki Sato,Finance,Accounts Receivable Specialist,nadia.petrova@contoso.example,Active,2022-10-10
+E1018,Brianna Cole,Finance,Payroll Specialist,oliver.hartmann@contoso.example,Active,2023-03-20
+E1019,Rahul Mehta,Finance,FP&A Analyst,priya.raman@contoso.example,Active,2023-08-14
+E1020,Chloe Bennett,Finance,Billing Coordinator,nadia.petrova@contoso.example,Active,2024-01-29
+E1021,Daniel Okafor,Sales,Sales Director,marcus.whitfield@contoso.example,Active,2018-09-10
+E1022,Isabella Rossi,Sales,Regional Sales Manager,daniel.okafor@contoso.example,Active,2019-11-18
+E1023,Jamal Washington,Sales,Key Account Manager,isabella.rossi@contoso.example,Active,2020-05-26
+E1024,Fiona Gallagher,Sales,Account Executive,isabella.rossi@contoso.example,Active,2021-03-15
+E1025,Victor Almeida,Sales,Account Executive,isabella.rossi@contoso.example,Active,2021-09-27
+E1026,Zoe Fischer,Sales,Sales Operations Analyst,daniel.okafor@contoso.example,Active,2022-06-06
+E1027,Andre Dubois,Sales,Business Development Representative,isabella.rossi@contoso.example,Active,2023-02-13
+E1028,Mariam Hassan,Sales,Customer Success Manager,daniel.okafor@contoso.example,Active,2023-06-26
+E1029,Patrick Nguyen,Sales,Inside Sales Representative,isabella.rossi@contoso.example,Active,2024-02-12
+E1030,Leah Goldberg,Sales,Sales Coordinator,daniel.okafor@contoso.example,Active,2024-05-20
+E1031,Hannah Brooks,IT,IT Director,marcus.whitfield@contoso.example,Active,2018-05-14
+E1032,Ethan Park,IT,IT Operations Manager,hannah.brooks@contoso.example,Active,2019-08-12
+E1033,Amara Diallo,IT,Security Analyst,hannah.brooks@contoso.example,Active,2021-01-11
+E1034,Lucas Moreau,IT,Systems Administrator,ethan.park@contoso.example,Active,2020-04-06
+E1035,Ingrid Svensson,IT,Network Engineer,ethan.park@contoso.example,Active,2021-07-19
+E1036,Omar Farouk,IT,Service Desk Lead,hannah.brooks@contoso.example,Active,2022-03-14
+E1037,Tessa Morgan,IT,Identity and Access Analyst,hannah.brooks@contoso.example,Active,2022-09-12
+E1038,Dmitri Volkov,IT,Software Developer,hannah.brooks@contoso.example,Active,2023-04-03
+E1039,Nia Campbell,IT,Service Desk Analyst,ethan.park@contoso.example,Active,2023-11-06
+E1040,Felix Andersson,IT,Cloud Engineer,hannah.brooks@contoso.example,Active,2024-03-18
