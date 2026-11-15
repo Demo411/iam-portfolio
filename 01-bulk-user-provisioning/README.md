@@ -12,6 +12,7 @@ A PowerShell 7 and Microsoft Graph script that runs joiner-mover-leaver (JML) fr
 | [`samples/hr_export.csv`](./samples/hr_export.csv) | Fake HR export: 40 Contoso Logistics employees across Finance, Sales, IT and Operations |
 | [`samples/hr_export_movers.csv`](./samples/hr_export_movers.csv) | The same export with three movers (a department transfer, a promotion and a manager change) for testing the Mover phase |
 | [`samples/hr_export_leavers.csv`](./samples/hr_export_leavers.csv) | The same export with three employees set to `Terminated`, for testing the Leaver phase |
+| [`samples/jml-audit-leavers-example.csv`](./samples/jml-audit-leavers-example.csv) | The audit log from the live Leaver run on the lab tenant, with the tenant ID, client ID and domain replaced by placeholders |
 | [`docs/setup.md`](./docs/setup.md) | Create the app registration and certificate, grant Graph permissions, and run the script |
 
 ## Quick start

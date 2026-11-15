@@ -181,7 +181,7 @@ This disables all 40 accounts, revokes their sessions and empties the `DEPT-*` g
 
 ### Audit logs
 
-Each run writes `logs/jml-audit-<timestamp>.csv` inside the project folder (override with `-AuditLogPath`). The `logs/` folder is git-ignored because the logs contain names, UPNs and employee IDs. Commit a redacted copy to `samples/` if you want to show example output.
+Each run writes `logs/jml-audit-<timestamp>.csv` inside the project folder (override with `-AuditLogPath`). The `logs/` folder is git-ignored because the logs contain names, UPNs and employee IDs. [`samples/jml-audit-leavers-example.csv`](../samples/jml-audit-leavers-example.csv) is a redacted example: the log of the live Leaver run, with the tenant ID, client ID and domain replaced by placeholders.
 
 Columns: `Timestamp, Mode, Actor, Action, EmployeeId, Target, Result, Detail`. `Result` is one of `Success`, `WhatIf`, `Skipped`, `Declined` or `Failed`. The script exits with code 1 if any action failed.
 
