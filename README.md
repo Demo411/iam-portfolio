@@ -12,7 +12,7 @@ This repo collects projects that show how I design, build and document IAM contr
 
 | # | Project | Description | Status |
 |---|---------|-------------|--------|
-| 01 | [Bulk User Provisioning](./01-bulk-user-provisioning) | PowerShell + Graph script that runs joiner-mover-leaver from an HR CSV for 40 users, with dry-run and audit logging. | In progress |
+| 01 | [Bulk User Provisioning](./01-bulk-user-provisioning) | PowerShell + Graph script that runs joiner-mover-leaver from an HR CSV for 40 users, with dry-run and audit logging. | Complete |
 | 02 | [Conditional Access Baseline](./02-conditional-access-baseline) | 8 CA policies rolled out report-only first, impact measured with KQL, then enforced. | Planned |
 | 03 | [SSO with SAML and OIDC](./03-sso-saml-oidc) | One SAML and one OIDC app integrated with Entra ID, with annotated tokens and troubleshooting write-ups. | Planned |
 | 04 | [Access Review Program](./04-access-review-program) | Quarterly access reviews and PIM for a fake company, ending in an audit-ready evidence pack mapped to NIST AC-2/AC-6. | Planned |

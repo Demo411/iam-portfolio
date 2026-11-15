@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An identity and access management (IAM) portfolio of five numbered, self-contained projects. The remote is the public GitHub repo `Demo411/iam-portfolio` (branch `main`), so everything committed is publicly visible.
 
-Only Project 01 has code so far: its Joiner, Mover and Leaver phases, all verified on the lab tenant. Projects 02-05 are folders with empty READMEs. The root `README.md` has a project table with a Status column; keep it in sync with reality (01 is "In progress", the rest "Planned").
+Only Project 01 has code so far: its Joiner, Mover and Leaver phases, all verified on the lab tenant. Projects 02-05 are folders with empty READMEs. The root `README.md` has a project table with a Status column; keep it in sync with reality (01 is "Complete", the rest "Planned").
 
 All projects use one fictional company, Contoso Logistics (Finance, Sales, IT, Operations).
 

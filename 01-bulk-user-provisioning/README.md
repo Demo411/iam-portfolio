@@ -2,7 +2,7 @@
 
 A PowerShell 7 and Microsoft Graph script that runs joiner-mover-leaver (JML) from an HR CSV export for the 40 employees of the fictional Contoso Logistics, with dry-run support and audit logging.
 
-**Status:** In progress. Joiner and Mover (department, job title and manager changes, with department group moves) are implemented and verified on a lab tenant. Leaver (disable the account, revoke sessions, remove group access) is implemented and verified on the lab tenant too.
+**Status:** Complete. Joiner, Mover (department, job title and manager changes, with department group moves) and Leaver (disable the account, revoke sessions, remove group access) are implemented and verified on a lab tenant.
 
 ## Contents
 
